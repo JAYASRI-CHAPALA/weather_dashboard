@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Weather Dashboard</title>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root{
+      --bg: linear-gradient(180deg,#e6f7ff 0%, #f8fbff 100%);
+      --panel: #ffffff;
+      --muted: #6b7280;
+      --brand: #0369a1;
+      --glass: rgba(255,255,255,0.6);
+      --radius: 14px;
+      --card-shadow: 0 8px 30px rgba(2,6,23,0.06);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    }
+    body.dark{
+      --bg: linear-gradient(180deg,#071427 0%, #0b2133 100%);
+      --panel: #0f1724;
+      --muted: #94a3b8;
+      --brand: #4f9fbf;
+      --glass: rgba(255,255,255,0.03);
+      --card-shadow: 0 10px 30px rgba(2,6,23,0.6);
+      color: #e6eef7;
+    }
+
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);transition:background .25s,color .25s}
+    a{color:inherit;text-decoration:none}
+    .container{max-width:1150px;margin:24px auto;padding:18px}
+
+    .app{display:grid;grid-template-columns:320px 1fr;gap:20px}
+    @media (max-width:900px){ .app{grid-template-columns:1fr} .left{order:2} .right{order:1} }
+
+    .left{background:var(--panel);border-radius:var(--radius);padding:20px;box-shadow:var(--card-shadow)}
+    .right{display:flex;flex-direction:column;gap:14px}
+
+    .card{background:var(--panel);border-radius:12px;padding:16px;box-shadow:var(--card-shadow)}
+    .small{font-size:.88rem;color:var(--muted)}
+
+    .city-name{font-size:1.15rem;font-weight:600}
+    .temp-big{font-size:3rem;font-weight:700;margin-top:6px}
+    .cond{color:var(--muted);margin-top:6px}
+
+    .controls-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+    input[type="text"]{padding:8px 10px;border-radius:8px;border:1px solid rgba(2,6,23,0.06);min-width:180px}
+    button.btn{padding:8px 10px;border-radius:8px;border:none;background:var(--brand);color:white;cursor:pointer}
+    button.tab{padding:6px 10px;border-radius:8px;border:none;background:transparent;cursor:pointer}
+    button.tab.active{background:var(--brand);color:white}
+
+    .forecast-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px}
+    .forecast-item{background:var(--glass);border-radius:10px;padding:8px;text-align:center;font-size:.9rem;color:var(--muted)}
+
+    .hidden{display:none}
+    .error{background:#fee2e2;color:#9b1c1c;padding:10px;border-radius:8px}
+    .loading{padding:10px;color:var(--muted)}
+    footer.small{margin-top:10px;color:var(--muted);font-size:.85rem}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="controls-row card">
+      <form id="searchForm" onsubmit="return false;" style="display:flex;gap:8px;align-items:center">
+        <input id="cityInput" type="text" placeholder="Search city">
+        <button id="searchBtn" class="btn">Search</button>
+      </form>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="geoBtn" class="tab">📍My Location</button>
+        <button id="cBtn" class="tab">°C</button>
+        <button id="fBtn" class="tab">°F</button>
+        <button id="cardsBtn" class="tab">Cards</button>
+        <button id="chartsBtn" class="tab">Charts</button>
+        <button id="darkToggle" class="tab">🌙</button>
+      </div>
+    </div>
+
+    <div id="error" class="error hidden"></div>
+    <div id="loading" class="loading hidden">Loading…</div>
+
+    <div class="app" style="margin-top:14px">
+      <!-- LEFT summary -->
+      <section class="left">
+        <div class="city-name" id="place">—</div>
+        <div class="small" id="updated">updated —</div>
+        <div class="temp-big" id="temperature">--°</div>
+        <div class="cond" id="condition">—</div>
+        <footer class="small">Data: Open-Meteo · Charts: Chart.js</footer>
+      </section>
+
+      <!-- RIGHT details -->
+      <section class="right">
+        <div id="details" class="hidden">
+          <!-- CARDS -->
+          <div id="cardsView">
+            <div class="card">
+              <h3>Hourly (next 12)</h3>
+              <div class="forecast-grid" id="hourlyList"></div>
+            </div>
+            <div class="card">
+              <h3>7-day forecast</h3>
+              <div class="forecast-grid" id="dailyList"></div>
+            </div>
+          </div>
+          <!-- CHARTS -->
+          <div id="chartsView" class="hidden">
+            <div class="card"><canvas id="hourlyChart" height="120"></canvas></div>
+            <div class="card"><canvas id="dailyChart" height="140"></canvas></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    let units = localStorage.getItem("units") || "metric";
+    let viewMode = localStorage.getItem("viewMode") || "cards";
+    let dark = JSON.parse(localStorage.getItem("dark") || "false");
+
+    const el = {
+      error: document.getElementById("error"),
+      loading: document.getElementById("loading"),
+      place: document.getElementById("place"),
+      updated: document.getElementById("updated"),
+      temperature: document.getElementById("temperature"),
+      condition: document.getElementById("condition"),
+      hourlyList: document.getElementById("hourlyList"),
+      dailyList: document.getElementById("dailyList"),
+      cardsView: document.getElementById("cardsView"),
+      chartsView: document.getElementById("chartsView"),
+      details: document.getElementById("details")
+    };
+
+    const cBtn = document.getElementById("cBtn");
+    const fBtn = document.getElementById("fBtn");
+    const cardsBtn = document.getElementById("cardsBtn");
+    const chartsBtn = document.getElementById("chartsBtn");
+    const darkToggle = document.getElementById("darkToggle");
+
+    const searchForm = document.getElementById("searchForm");
+    const cityInput = document.getElementById("cityInput");
+    const geoBtn = document.getElementById("geoBtn");
+
+    const weatherIcons = {0:"☀️",1:"🌤️",2:"⛅",3:"☁️",61:"🌦️",63:"🌧️",71:"❄️",95:"⛈️"};
+
+    let hourlyChart = null, dailyChart = null;
+    let lastData = null, lastLat = null, lastLon = null, lastName = null;
+
+    function applyUI(){
+      document.body.classList.toggle("dark", dark);
+      cBtn.classList.toggle("active", units==="metric");
+      fBtn.classList.toggle("active", units==="imperial");
+      cardsBtn.classList.toggle("active", viewMode==="cards");
+      chartsBtn.classList.toggle("active", viewMode==="charts");
+      el.cardsView.classList.toggle("hidden", viewMode!=="cards");
+      el.chartsView.classList.toggle("hidden", viewMode!=="charts");
+      darkToggle.textContent = dark ? "☀️" : "🌙";
+    }
+
+    function showError(msg){ el.error.textContent=msg; el.error.classList.remove("hidden"); }
+    function clearError(){ el.error.classList.add("hidden"); }
+    function showLoading(y){ el.loading.classList.toggle("hidden",!y); }
+
+    function safeDestroy(ch){ if(ch) try{ch.destroy()}catch(e){} }
+
+    async function fetchWeather(lat,lon,name){
+      clearError(); showLoading(true);
+      try{
+        const temp_unit = units==="metric"?"celsius":"fahrenheit";
+        const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,weathercode&daily=temperature_2m_max,temperature_2m_min,weathercode&current_weather=true&timezone=auto&temperature_unit=${temp_unit}`;
+        const res = await fetch(url); if(!res.ok) throw new Error("API error");
+        const data = await res.json();
+        lastData=data; lastLat=lat; lastLon=lon; lastName=name;
+        renderAll(data,lat,lon,name);
+      }catch(e){showError(e.message)} finally{showLoading(false);}
+    }
+
+    function renderAll(data,lat,lon,name){
+      const cur=data.current_weather;
+      el.place.textContent=name;
+      el.updated.textContent="Updated "+new Date(cur.time).toLocaleTimeString();
+      el.temperature.textContent=Math.round(cur.temperature)+"°"+(units==="metric"?"C":"F");
+      el.condition.textContent=weatherIcons[cur.weathercode]||"—";
+      el.details.classList.remove("hidden");
+
+      // Hourly cards
+      el.hourlyList.innerHTML="";
+      for(let i=0;i<12;i++){
+        const t=data.hourly.time[i];
+        const temp=data.hourly.temperature_2m[i];
+        const wcode=data.hourly.weathercode[i];
+        const div=document.createElement("div");
+        div.className="forecast-item";
+        div.innerHTML=`<div>${new Date(t).getHours()}:00</div><div>${weatherIcons[wcode]||"❓"}</div><div>${Math.round(temp)}°</div>`;
+        el.hourlyList.appendChild(div);
+      }
+
+      // Daily cards
+      el.dailyList.innerHTML="";
+      for(let i=0;i<data.daily.time.length;i++){
+        const d=data.daily.time[i];
+        const max=data.daily.temperature_2m_max[i];
+        const min=data.daily.temperature_2m_min[i];
+        const wcode=data.daily.weathercode[i];
+        const div=document.createElement("div");
+        div.className="forecast-item";
+        div.innerHTML=`<div>${new Date(d).toLocaleDateString(undefined,{weekday:"short"})}</div><div>${weatherIcons[wcode]||"❓"}</div><div>${max}° / ${min}°</div>`;
+        el.dailyList.appendChild(div);
+      }
+
+      // Charts
+      if(viewMode==="charts"){
+        safeDestroy(hourlyChart); safeDestroy(dailyChart);
+        const ctxH=document.getElementById("hourlyChart").getContext("2d");
+        hourlyChart=new Chart(ctxH,{type:"line",data:{labels:data.hourly.time.slice(0,24).map(t=>new Date(t).getHours()+":00"),datasets:[{data:data.hourly.temperature_2m.slice(0,24),borderWidth:2}]},options:{plugins:{legend:{display:false}}}});
+        const ctxD=document.getElementById("dailyChart").getContext("2d");
+        dailyChart=new Chart(ctxD,{type:"line",data:{labels:data.daily.time.map(t=>new Date(t).toLocaleDateString(undefined,{weekday:"short"})),datasets:[{label:"Max",data:data.daily.temperature_2m_max},{label:"Min",data:data.daily.temperature_2m_min}]},options:{responsive:true}});
+      }
+    }
+
+    async function geocode(q){
+      const res=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1`);
+      const j=await res.json();
+      return j.results?j.results[0]:null;
+    }
+
+    searchForm.addEventListener("submit",async e=>{
+      e.preventDefault();
+      const loc=await geocode(cityInput.value.trim());
+      if(!loc) return showError("City not found");
+      fetchWeather(loc.latitude,loc.longitude,loc.name);
+    });
+    geoBtn.addEventListener("click",()=>navigator.geolocation.getCurrentPosition(p=>fetchWeather(p.coords.latitude,p.coords.longitude,"My location")));
+
+    cBtn.addEventListener("click",()=>{units="metric";localStorage.setItem("units",units);applyUI();if(lastData)renderAll(lastData,lastLat,lastLon,lastName);});
+    fBtn.addEventListener("click",()=>{units="imperial";localStorage.setItem("units",units);applyUI();if(lastData)renderAll(lastData,lastLat,lastLon,lastName);});
+    cardsBtn.addEventListener("click",()=>{viewMode="cards";localStorage.setItem("viewMode",viewMode);applyUI();if(lastData)renderAll(lastData,lastLat,lastLon,lastName);});
+    chartsBtn.addEventListener("click",()=>{viewMode="charts";localStorage.setItem("viewMode",viewMode);applyUI();if(lastData)renderAll(lastData,lastLat,lastLon,lastName);});
+    darkToggle.addEventListener("click",()=>{dark=!dark;localStorage.setItem("dark",dark);applyUI();});
+
+    applyUI();
+    fetchWeather(51.5072,-0.1276,"London");
+  </script>
+</body>
+</html>
